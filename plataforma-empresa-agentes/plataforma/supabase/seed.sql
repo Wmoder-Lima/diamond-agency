@@ -1,0 +1,20 @@
+insert into agents (id, name, role, department) values
+  ('beatriz',  'Beatriz',  'Diretora Geral',                'diretoria'),
+  ('helena',   'Helena',   'Diretora de Tecnologia',        'tecnologia'),
+  ('rafael',   'Rafael',   'Arquiteto de Software',         'tecnologia'),
+  ('camila',   'Camila',   'Desenvolvedora Front-end',      'tecnologia'),
+  ('thiago',   'Thiago',   'Desenvolvedor Back-end',        'tecnologia'),
+  ('bruno',    'Bruno',    'Desenvolvedor Fullstack',       'tecnologia'),
+  ('larissa',  'Larissa',  'Engenheira de QA',              'tecnologia'),
+  ('diego',    'Diego',    'Suporte de TI',                 'tecnologia'),
+  ('marcela',  'Marcela',  'Diretora de Marketing',         'marketing'),
+  ('lucas',    'Lucas',    'Designer',                      'marketing'),
+  ('paula',    'Paula',    'CRM e Relacionamento',          'marketing'),
+  ('renato',   'Renato',   'Inteligência de Mercado',       'marketing'),
+  ('gustavo',  'Gustavo',  'Tráfego Pago',                  'marketing'),
+  ('nina',     'Nina',     'Vídeo e Cortes Virais',         'marketing'),
+  ('felipe',   'Felipe',   'SDR e Prospecção',              'comercial'),
+  ('juliana',  'Juliana',  'Closer e Follow-up',            'comercial'),
+  ('marcos',   'Marcos',   'Sucesso do Cliente e Upsell',   'comercial'),
+  ('isabela',  'Isabela',  'Apresentações',                 'comercial')
+on conflict (id) do nothing;
