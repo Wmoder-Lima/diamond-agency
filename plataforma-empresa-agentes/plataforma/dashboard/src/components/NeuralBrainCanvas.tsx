@@ -1,6 +1,11 @@
 import React, { useRef, useEffect, useState } from 'react';
-import { Brain, Zap, X } from 'lucide-react';
-import { MOCK_MEMORIES, MemoryNode } from '../data/mockData';
+import { Brain, Zap, X, Sparkles } from 'lucide-react';
+
+interface NeuralBrainCanvasProps {
+  memories?: any[];
+  agents?: any[];
+  onSelectNode?: (node: any) => void;
+}
 
 interface Neuron {
   x: number;
@@ -13,9 +18,9 @@ interface Neuron {
   glowColor: string;
   pulsePhase: number;
   energy: number;
-  nodeData?: MemoryNode;
+  nodeData?: any;
   label: string;
-  depth: number;
+  category: string;
 }
 
 interface Pulse {
@@ -26,16 +31,23 @@ interface Pulse {
   color: string;
 }
 
-interface NeuralBrainCanvasProps {
-  onSelectNode?: (node: MemoryNode) => void;
-}
-
-export const NeuralBrainCanvas: React.FC<NeuralBrainCanvasProps> = ({ onSelectNode }) => {
+export const NeuralBrainCanvas: React.FC<NeuralBrainCanvasProps> = ({
+  memories = [],
+  agents = [],
+  onSelectNode
+}) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const [selectedNode, setSelectedNode] = useState<MemoryNode | null>(MOCK_MEMORIES[0]);
+  const [selectedNode, setSelectedNode] = useState<any | null>(null);
   const [networkPulse, setNetworkPulse] = useState(1);
-  const [showNodeDetail, setShowNodeDetail] = useState(true);
+  const [showNodeDetail, setShowNodeDetail] = useState(false);
+
+  // Define o nó selecionado inicial quando as memórias chegarem
+  useEffect(() => {
+    if (memories.length > 0 && !selectedNode) {
+      setSelectedNode(memories[0]);
+    }
+  }, [memories, selectedNode]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -64,12 +76,17 @@ export const NeuralBrainCanvas: React.FC<NeuralBrainCanvasProps> = ({ onSelectNo
       { color: '#38bdf8', glow: 'rgba(56, 189, 248, 0.35)' }
     ];
 
+    // Constrói os dados dos nós a partir do Supabase real
     const neurons: Neuron[] = [];
-    const totalNeurons = isMobile ? 32 : 48;
+    const sourceItems = memories.length > 0 
+      ? memories 
+      : (agents.length > 0 ? agents : [{ id: 'init', name: 'Cluster Inicial', department: 'sistema' }]);
+    
+    const targetCount = isMobile ? Math.min(32, Math.max(16, sourceItems.length * 2)) : Math.min(48, Math.max(24, sourceItems.length * 2));
 
-    for (let i = 0; i < totalNeurons; i++) {
+    for (let i = 0; i < targetCount; i++) {
       const isLeftHemisphere = i % 2 === 0;
-      const angle = (Math.PI * 2 * i) / totalNeurons;
+      const angle = (Math.PI * 2 * i) / targetCount;
       const rX = (width * 0.3) * (0.45 + Math.random() * 0.55);
       const rY = (height * 0.32) * (0.45 + Math.random() * 0.55);
 
@@ -80,8 +97,11 @@ export const NeuralBrainCanvas: React.FC<NeuralBrainCanvasProps> = ({ onSelectNo
       const x = centerX + Math.cos(angle) * rX;
       const y = centerY + Math.sin(angle) * rY;
 
-      const palette = colorPalette[Math.floor(Math.random() * colorPalette.length)];
-      const memoryMatch = MOCK_MEMORIES[i % MOCK_MEMORIES.length];
+      const palette = colorPalette[i % colorPalette.length];
+      const dataItem = sourceItems[i % sourceItems.length];
+
+      const label = dataItem.title || dataItem.name || `Sinapse #${i + 1}`;
+      const category = dataItem.category || dataItem.department || 'geral';
 
       neurons.push({
         x,
@@ -94,19 +114,19 @@ export const NeuralBrainCanvas: React.FC<NeuralBrainCanvasProps> = ({ onSelectNo
         glowColor: palette.glow,
         pulsePhase: Math.random() * Math.PI * 2,
         energy: Math.random(),
-        nodeData: i < MOCK_MEMORIES.length ? memoryMatch : undefined,
-        label: i < MOCK_MEMORIES.length ? memoryMatch.title : `Sinapse #${i + 1}`,
-        depth: 0.5 + Math.random() * 0.5
+        nodeData: dataItem,
+        label,
+        category
       });
     }
 
     const pulses: Pulse[] = [];
-    const maxPulses = isMobile ? 8 : 12;
+    const maxPulses = isMobile ? 8 : 14;
 
     for (let p = 0; p < maxPulses; p++) {
       pulses.push({
-        sourceIndex: Math.floor(Math.random() * totalNeurons),
-        targetIndex: Math.floor(Math.random() * totalNeurons),
+        sourceIndex: Math.floor(Math.random() * neurons.length),
+        targetIndex: Math.floor(Math.random() * neurons.length),
         progress: Math.random(),
         speed: 0.007 + Math.random() * 0.012,
         color: Math.random() > 0.4 ? '#a855f7' : '#38bdf8'
@@ -146,24 +166,8 @@ export const NeuralBrainCanvas: React.FC<NeuralBrainCanvasProps> = ({ onSelectNo
         hoveredNeuron.energy = 2.0;
         hoveredNeuron.radius = hoveredNeuron.baseRadius * 1.8;
         setShowNodeDetail(true);
-        if (hoveredNeuron.nodeData) {
-          setSelectedNode(hoveredNeuron.nodeData);
-          if (onSelectNode) onSelectNode(hoveredNeuron.nodeData);
-        } else {
-          const tempMem: MemoryNode = {
-            id: `temp-${Date.now()}`,
-            title: hoveredNeuron.label,
-            content: `Sinapse ativa das skills Claude. Conexão neural em ${Math.round(hoveredNeuron.energy * 100)}%.`,
-            category: 'tecnologia',
-            tags: ['skill', 'claude-code'],
-            created_by: 'helena',
-            created_at: new Date().toISOString(),
-            connections: [],
-            importance: 85
-          };
-          setSelectedNode(tempMem);
-          if (onSelectNode) onSelectNode(tempMem);
-        }
+        setSelectedNode(hoveredNeuron.nodeData);
+        if (onSelectNode) onSelectNode(hoveredNeuron.nodeData);
 
         neurons.forEach((other) => {
           const dist = Math.hypot(other.x - hoveredNeuron!.x, other.y - hoveredNeuron!.y);
@@ -259,7 +263,7 @@ export const NeuralBrainCanvas: React.FC<NeuralBrainCanvasProps> = ({ onSelectNo
         ctx.fillStyle = isHoveredNode ? '#ffffff' : n.color;
         ctx.fill();
 
-        if (n.nodeData && n.nodeData.id === selectedNode?.id) {
+        if (n.nodeData && selectedNode && (n.nodeData.id === selectedNode.id)) {
           ctx.beginPath();
           ctx.arc(n.x, n.y, currentRadius + 3.5, 0, Math.PI * 2);
           ctx.strokeStyle = '#c084fc';
@@ -280,11 +284,11 @@ export const NeuralBrainCanvas: React.FC<NeuralBrainCanvasProps> = ({ onSelectNo
       canvas.removeEventListener('click', triggerSelect);
       cancelAnimationFrame(animationFrameId);
     };
-  }, [networkPulse, selectedNode]);
+  }, [networkPulse, selectedNode, memories, agents]);
 
   return (
     <div className="relative rounded-xl bg-[#06050a] border border-purple-950/60 overflow-hidden text-left">
-      {/* Top Header Responsivo */}
+      {/* Top Header */}
       <div className="flex flex-wrap items-center justify-between px-3 sm:px-4 py-2.5 sm:py-3 border-b border-purple-950/40 bg-[#07060d] gap-2">
         <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
           <div className="p-1 sm:p-1.5 rounded-lg bg-purple-950/50 border border-purple-900/40 text-purple-300 shrink-0">
@@ -293,14 +297,14 @@ export const NeuralBrainCanvas: React.FC<NeuralBrainCanvasProps> = ({ onSelectNo
           <div className="min-w-0">
             <div className="flex items-center gap-1.5">
               <h3 className="text-xs font-semibold text-white tracking-wide truncate">
-                Cérebro Neural de Skills
+                Cérebro Neural de Memória (Supabase)
               </h3>
               <span className="text-[8px] sm:text-[9px] px-1.5 py-0.2 rounded bg-purple-950 border border-purple-800/40 text-purple-300 font-mono shrink-0">
-                18 SKILLS
+                {memories.length} MEMÓRIAS • {agents.length} AGENTES
               </span>
             </div>
             <p className="text-[10px] text-zinc-500 hidden sm:block truncate">
-              Rede sináptica conectando as rotinas e memórias do Claude
+              Dados persistidos em tempo real na tabela memories e agents
             </p>
           </div>
         </div>
@@ -314,32 +318,31 @@ export const NeuralBrainCanvas: React.FC<NeuralBrainCanvasProps> = ({ onSelectNo
         </button>
       </div>
 
-      {/* Canvas com Altura Adaptativa */}
+      {/* Canvas */}
       <div ref={containerRef} className="relative w-full h-[280px] sm:h-[360px] bg-[#05040a] cursor-crosshair">
         <canvas ref={canvasRef} className="w-full h-full block" />
 
-        {/* Legenda Discreta */}
         <div className="absolute bottom-2.5 left-3 flex items-center gap-2.5 px-2.5 py-1 rounded bg-[#080710]/90 border border-purple-950/60 text-[9px] text-zinc-400">
           <div className="flex items-center gap-1">
             <span className="w-1.5 h-1.5 rounded-full bg-purple-500" />
-            <span>Memória</span>
+            <span>Memória Real</span>
           </div>
           <div className="flex items-center gap-1">
             <span className="w-1.5 h-1.5 rounded-full bg-sky-400" />
-            <span>Handoff</span>
+            <span>Sinapse Ativa</span>
           </div>
         </div>
 
-        {/* Card Flutuante de Memória no Mobile e Desktop */}
+        {/* Card Flutuante de Detalhes da Memória Selecionada */}
         {selectedNode && showNodeDetail && (
           <div className="absolute top-2 right-2 sm:right-3 w-[calc(100%-1rem)] sm:w-72 max-w-sm p-3 rounded-lg bg-[#080710]/95 border border-purple-900/40 text-left backdrop-blur-md shadow-xl z-10">
             <div className="flex items-center justify-between mb-1">
               <span className="text-[8px] sm:text-[9px] uppercase font-mono px-1.5 py-0.2 rounded bg-purple-950 border border-purple-800/40 text-purple-300">
-                {selectedNode.category}
+                {selectedNode.category || selectedNode.department || 'geral'}
               </span>
               <div className="flex items-center gap-2">
                 <span className="text-[8px] sm:text-[9px] text-zinc-500 font-mono">
-                  Skill: {selectedNode.created_by}
+                  {selectedNode.created_by ? `Por: ${selectedNode.created_by}` : (selectedNode.role || 'Agente')}
                 </span>
                 <button
                   onClick={() => setShowNodeDetail(false)}
@@ -350,21 +353,23 @@ export const NeuralBrainCanvas: React.FC<NeuralBrainCanvasProps> = ({ onSelectNo
               </div>
             </div>
             <h4 className="text-xs font-semibold text-white mb-1 truncate">
-              {selectedNode.title}
+              {selectedNode.title || selectedNode.name}
             </h4>
-            <p className="text-[10px] sm:text-[11px] text-zinc-300 leading-relaxed mb-1.5 line-clamp-2 sm:line-clamp-3">
-              {selectedNode.content}
+            <p className="text-[10px] sm:text-[11px] text-zinc-300 leading-relaxed mb-1.5 line-clamp-3">
+              {selectedNode.content || selectedNode.role || 'Registro operacional da plataforma.'}
             </p>
-            <div className="flex flex-wrap gap-1">
-              {selectedNode.tags.slice(0, 3).map((tag) => (
-                <span
-                  key={tag}
-                  className="text-[8px] sm:text-[9px] px-1 py-0.2 rounded bg-[#100d1c] text-purple-300 font-mono"
-                >
-                  #{tag}
-                </span>
-              ))}
-            </div>
+            {selectedNode.tags && Array.isArray(selectedNode.tags) && (
+              <div className="flex flex-wrap gap-1">
+                {selectedNode.tags.slice(0, 3).map((tag: string) => (
+                  <span
+                    key={tag}
+                    className="text-[8px] sm:text-[9px] px-1 py-0.2 rounded bg-[#100d1c] text-purple-300 font-mono"
+                  >
+                    #{tag}
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>
