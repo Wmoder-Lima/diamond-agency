@@ -129,8 +129,8 @@ begin
     execute format('drop policy if exists owner_all on %I', t);
     execute format(
       'create policy owner_all on %I for all to authenticated
-         using ((auth.jwt() ->> ''email'') = ''SEU-EMAIL@EXEMPLO.COM'')
-         with check ((auth.jwt() ->> ''email'') = ''SEU-EMAIL@EXEMPLO.COM'')', t);
+         using ((auth.jwt() ->> ''email'') = ''willyanv91@gmail.com'')
+         with check ((auth.jwt() ->> ''email'') = ''willyanv91@gmail.com'')', t);
   end loop;
 end $$;
 
