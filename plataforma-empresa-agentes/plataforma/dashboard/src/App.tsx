@@ -5,7 +5,7 @@ import {
   TabType 
 } from './components/Sidebar';
 import { Header } from './components/Header';
-import { NeuralBrainCanvas } from './components/NeuralBrainCanvas';
+import { KnowledgeGraph } from './components/KnowledgeGraph';
 import { AgentAvatar } from './components/AgentAvatar';
 import { MetricsCharts } from './components/MetricsCharts';
 import { LiveCommsFeed } from './components/LiveCommsFeed';
@@ -391,9 +391,9 @@ export default function App() {
                 </div>
               </div>
 
-              {/* CÉREBRO VIRTUAL INTERATIVO INJETADO COM MEMÓRIAS E AGENTES REAIS */}
+              {/* CÉREBRO VIRTUAL INTERATIVO (REDE NEURAL RADIAL FORCE-GRAPH) */}
               <div className="space-y-2">
-                <NeuralBrainCanvas memories={memories} agents={agents} />
+                <KnowledgeGraph memories={memories} agents={agents} />
               </div>
 
               {/* Gráficos Reais Injetados com Tarefas e Agentes */}
@@ -783,7 +783,7 @@ export default function App() {
                 </p>
               </div>
 
-              <NeuralBrainCanvas memories={memories} agents={agents} />
+              <KnowledgeGraph memories={memories} agents={agents} />
 
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 {memories.length === 0 ? (
