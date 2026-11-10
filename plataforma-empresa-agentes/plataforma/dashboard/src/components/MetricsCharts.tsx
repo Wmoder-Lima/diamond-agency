@@ -1,20 +1,75 @@
-import React, { useState } from 'react';
-import { TrendingUp, Cpu, Sparkles } from 'lucide-react';
-import { MOCK_METRICS } from '../data/mockData';
+import React, { useState, useMemo } from 'react';
+import { TrendingUp, Cpu } from 'lucide-react';
 
-export const MetricsCharts: React.FC = () => {
+interface MetricsChartsProps {
+  tasks?: any[];
+  agents?: any[];
+  metrics?: any[];
+}
+
+export const MetricsCharts: React.FC<MetricsChartsProps> = ({
+  tasks = [],
+  agents = [],
+  metrics = []
+}) => {
   const [hoveredPoint, setHoveredPoint] = useState<number | null>(null);
-  const data = MOCK_METRICS.dailyThroughput;
+
+  // Calcula a carga por departamento baseada nas tarefas reais abertas
+  const departmentLoads = useMemo(() => {
+    const depts = [
+      { dept: 'Tecnologia', key: 'tecnologia', color: '#a855f7' },
+      { dept: 'Marketing', key: 'marketing', color: '#ec4899' },
+      { dept: 'Comercial', key: 'comercial', color: '#06b6d4' },
+      { dept: 'Diretoria', key: 'diretoria', color: '#eab308' }
+    ];
+
+    const activeTasks = tasks.filter((t) => t.status !== 'done' && t.status !== 'cancelled');
+    const totalActive = Math.max(1, activeTasks.length);
+
+    return depts.map((d) => {
+      const deptTasks = activeTasks.filter((t) => (t.department || '').toLowerCase() === d.key);
+      const deptAgents = agents.filter((a) => (a.department || '').toLowerCase() === d.key);
+      const percentage = Math.round((deptTasks.length / totalActive) * 100);
+
+      return {
+        dept: d.dept,
+        load: tasks.length > 0 ? percentage : 0,
+        count: deptTasks.length,
+        agents: deptAgents.length,
+        color: d.color
+      };
+    });
+  }, [tasks, agents]);
+
+  // Agrupa tarefas criadas/atualizadas por blocos de 3 horas para gerar o gráfico real
+  const throughputData = useMemo(() => {
+    const hours = ['00h', '03h', '06h', '09h', '12h', '15h', '18h', '21h'];
+    
+    // Contagem real das tarefas criadas nas últimas 24h
+    return hours.map((h, idx) => {
+      // Se houver tarefas reais com created_at, mapeia para as faixas de horário
+      const count = tasks.filter((t) => {
+        if (!t.created_at) return false;
+        const hour = new Date(t.created_at).getHours();
+        return hour >= idx * 3 && hour < (idx + 1) * 3;
+      }).length;
+
+      return {
+        hour: h,
+        tasks: count
+      };
+    });
+  }, [tasks]);
 
   const width = 640;
   const height = 180;
   const padding = 25;
 
-  const maxTasks = Math.max(...data.map((d) => d.tasks)) * 1.15;
+  const maxTasks = Math.max(5, ...throughputData.map((d) => d.tasks)) * 1.2;
   const minTasks = 0;
 
-  const points = data.map((d, index) => {
-    const x = padding + (index / (data.length - 1)) * (width - padding * 2);
+  const points = throughputData.map((d, index) => {
+    const x = padding + (index / (throughputData.length - 1)) * (width - padding * 2);
     const y = height - padding - ((d.tasks - minTasks) / (maxTasks - minTasks)) * (height - padding * 2);
     return { x, y, ...d };
   });
@@ -48,15 +103,15 @@ export const MetricsCharts: React.FC = () => {
             </div>
             <div>
               <h3 className="text-xs font-semibold text-white tracking-wide">
-                Throughput das Skills Claude (24h)
+                Volume de Tarefas por Horário (Supabase)
               </h3>
               <p className="text-[11px] text-zinc-500">
-                Execuções e chamadas registradas pela ponte CLI
+                {tasks.length} tarefas sincronizadas do banco de dados
               </p>
             </div>
           </div>
-          <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-950/30 border border-emerald-800/40 text-emerald-400">
-            +28.4% vs ontem
+          <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-purple-950/40 border border-purple-900/40 text-purple-300">
+            Tempo Real
           </span>
         </div>
 
@@ -69,7 +124,6 @@ export const MetricsCharts: React.FC = () => {
               </linearGradient>
             </defs>
 
-            {/* Linhas de grade suaves */}
             {[0.2, 0.5, 0.8].map((ratio) => {
               const y = padding + ratio * (height - padding * 2);
               return (
@@ -130,17 +184,14 @@ export const MetricsCharts: React.FC = () => {
               }}
             >
               <div className="font-semibold text-purple-300 text-[11px]">
-                {points[hoveredPoint].tasks} rotinas / h
-              </div>
-              <div className="text-[9px] text-zinc-500 font-mono">
-                {points[hoveredPoint].tokens}k tokens
+                {points[hoveredPoint].tasks} tarefas neste bloco
               </div>
             </div>
           )}
         </div>
       </div>
 
-      {/* Carga por Squad */}
+      {/* Carga por Squad Real */}
       <div className="rounded-xl bg-[#080710] border border-purple-950/50 p-4 flex flex-col justify-between">
         <div>
           <div className="flex items-center gap-2.5 mb-3">
@@ -152,26 +203,29 @@ export const MetricsCharts: React.FC = () => {
                 Carga Operacional por Squad
               </h3>
               <p className="text-[11px] text-zinc-500">
-                Alocação de inferência das skills
+                Distribuição de tarefas abertas no banco
               </p>
             </div>
           </div>
 
           <div className="space-y-3">
-            {MOCK_METRICS.departmentLoads.map((item) => (
+            {departmentLoads.map((item) => (
               <div key={item.dept} className="space-y-1">
                 <div className="flex items-center justify-between text-xs">
                   <span className="text-zinc-300 text-[11px]">
                     {item.dept}
                   </span>
                   <span className="text-zinc-500 font-mono text-[10px]">
-                    {item.load}% ({item.agents} skills)
+                    {item.load}% ({item.count} tarefas • {item.agents} agentes)
                   </span>
                 </div>
                 <div className="w-full h-1.5 rounded-full bg-[#0d0b17] overflow-hidden">
                   <div
-                    className="h-full rounded-full bg-purple-600 transition-all duration-300"
-                    style={{ width: `${item.load}%` }}
+                    className="h-full rounded-full transition-all duration-500"
+                    style={{
+                      width: `${item.load}%`,
+                      backgroundColor: item.color
+                    }}
                   />
                 </div>
               </div>
@@ -180,8 +234,10 @@ export const MetricsCharts: React.FC = () => {
         </div>
 
         <div className="mt-4 p-2.5 rounded-lg bg-[#0c0a16] border border-purple-950/40 flex items-center justify-between text-xs">
-          <div className="text-zinc-400 text-[11px]">Latência média</div>
-          <div className="font-mono text-zinc-200 text-xs">{MOCK_METRICS.averageResponseTimeMs}ms</div>
+          <div className="text-zinc-400 text-[11px]">Total de Tarefas Ativas</div>
+          <div className="font-mono text-zinc-200 text-xs">
+            {tasks.filter((t) => t.status !== 'done' && t.status !== 'cancelled').length} em andamento
+          </div>
         </div>
       </div>
     </div>
