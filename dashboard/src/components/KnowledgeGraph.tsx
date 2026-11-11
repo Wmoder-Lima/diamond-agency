@@ -1,502 +1,320 @@
-import React, { useRef, useEffect, useState, useMemo, useCallback } from 'react';
-import ForceGraph2D, { ForceGraphMethods, NodeObject, LinkObject } from 'react-force-graph-2d';
-import { 
-  Brain, 
-  Zap, 
-  X, 
-  Sparkles, 
-  Maximize2, 
-  RefreshCw, 
-  Cpu, 
-  CheckCircle2, 
-  Clock, 
-  ShieldAlert,
-  Bot
-} from 'lucide-react';
+import React, { Component, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ForceGraphMethods } from 'react-force-graph-3d';
+import { Activity, AlertCircle, Bot, BriefcaseBusiness, Check, Clock3, Maximize2, Pause, Play, Radio, Sparkles, X } from 'lucide-react';
+import { buildBrainGraph, createDemoData, getAgentActivity, type BrainNode } from './brainModel';
+
+const ForceGraph3D = lazy(() => import('react-force-graph-3d'));
+const EMPTY: any[] = [];
+const STATUS: Record<string, string> = {
+  working: 'Em atividade', idle: 'Disponível', waiting: 'Aguardando', offline: 'Offline',
+  todo: 'A fazer', doing: 'Em execução', blocked: 'Bloqueada', review: 'Em revisão',
+  done: 'Concluída', cancelled: 'Cancelada', pending: 'Aguardando decisão', active: 'Em atendimento',
+};
+const KIND: Record<string, string> = {
+  agent: 'Agente', task: 'Tarefa', approval: 'Pendência', service: 'Atendimento', memory: 'Memória', message: 'Conversa', cluster: 'Setor',
+};
 
 interface KnowledgeGraphProps {
-  memories?: any[];
-  agents?: any[];
+  memories?: any[]; agents?: any[]; tasks?: any[]; events?: any[]; messages?: any[]; approvals?: any[];
+  services?: any[]; dataWarning?: string | null; demo?: boolean; onDemoChange?: (value: boolean) => void;
   onSelectNode?: (node: any) => void;
 }
-
-interface CustomNode {
-  id: string;
-  name: string;
-  role?: string;
-  department?: string;
-  status?: string;
-  category?: string;
-  content?: string;
-  tags?: string[];
-  isCenter?: boolean;
-  val: number;
-  color: string;
-  x?: number;
-  y?: number;
-  fx?: number;
-  fy?: number;
+class GraphBoundary extends Component<{ children: React.ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() { return { failed: true }; }
+  render() {
+    return this.state.failed
+      ? <div role="status" className="h-full flex items-center justify-center p-8 text-center text-sm text-zinc-300">A visualização 3D não está disponível neste navegador. Use a lista operacional abaixo.</div>
+      : this.props.children;
+  }
 }
-
-interface CustomLink {
-  source: string | CustomNode;
-  target: string | CustomNode;
-  status?: string;
-  speed?: number;
+function dateLabel(value: unknown) {
+  if (typeof value !== 'string') return 'Horário não informado';
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toLocaleString('pt-BR') : 'Horário não informado';
 }
 
 export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({
-  memories: propMemories,
-  agents: propAgents,
-  onSelectNode
+  memories = EMPTY, agents = EMPTY, tasks = EMPTY, events = EMPTY, messages = EMPTY,
+  approvals = EMPTY, services = EMPTY, dataWarning, demo = false, onDemoChange, onSelectNode,
 }) => {
-  const fgRef = useRef<ForceGraphMethods<CustomNode, CustomLink> | undefined>(undefined);
-  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [demoStep, setDemoStep] = useState(0);
+  const demoData = useMemo(() => demo ? createDemoData(demoStep) : null, [demo, demoStep]);
+  const live = demoData || { agents, memories, tasks, events, messages, approvals, services };
+  const graph = useMemo(() => buildBrainGraph(
+    live.agents, live.memories, live.tasks, live.approvals, live.messages, live.services,
+  ), [live.agents, live.memories, live.tasks, live.approvals, live.messages, live.services]);
 
-  // Dados são fornecidos pelo App; não abrir canais Realtime duplicados aqui.
-  const memories = propMemories ?? [];
-  const agents = propAgents ?? [];
+  const fgRef = useRef<ForceGraphMethods<any> | undefined>(undefined);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const labelElements = useRef(new Map<string, HTMLSpanElement>());
+  const selectionTrigger = useRef<HTMLElement | null>(null);
+  const initialized = useRef(false);
+  const motionRef = useRef(true);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const controlsRef = useRef<any>(null);
+  const controlsHandlers = useRef<{ start: () => void; end: () => void } | null>(null);
+  const [dimensions, setDimensions] = useState({ width: 700, height: 560 });
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [motion, setMotion] = useState(true);
 
-  const [selectedNode, setSelectedNode] = useState<CustomNode | null>(null);
-  const [dimensions, setDimensions] = useState({ width: 700, height: 440 });
+  const selected = graph.nodes.find(n => n.id === selectedId);
+  const hovered = graph.nodes.find(n => n.id === hoveredId);
+  const selectedAgent = selected?.kind === 'agent'
+    ? live.agents.find((a: any) => String(a.id) === selected.entityId) : null;
+  const selectedMemory = selected?.kind === 'memory'
+    ? live.memories.find((m: any) => String(m.id) === selected.entityId) : null;
+  const activity = useMemo(() => selectedAgent
+    ? getAgentActivity(String(selectedAgent.id), live.tasks, live.events, live.messages, live.approvals)
+    : null, [selectedAgent, live.tasks, live.events, live.messages, live.approvals]);
+  const assignedAgent = (id: unknown) => live.agents.find((a: any) => String(a.id) === String(id));
+  const relatedServices = selectedAgent
+    ? live.services.filter((service: any) => String(service.agent_id) === String(selectedAgent.id)) : [];
 
-  // Responsividade de dimensões do container
   useEffect(() => {
-    const updateSize = () => {
-      if (containerRef.current) {
-        const w = containerRef.current.clientWidth || 700;
-        const h = window.innerWidth < 640 ? 320 : 440;
-        setDimensions({ width: w, height: h });
-      }
-    };
-
-    updateSize();
-    window.addEventListener('resize', updateSize);
-    return () => window.removeEventListener('resize', updateSize);
+    const element = containerRef.current;
+    if (!element) return;
+    const observer = new ResizeObserver(() => {
+      const width = element.clientWidth;
+      if (Number.isFinite(width) && width > 0) setDimensions({ width, height: width < 640 ? 500 : 650 });
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
   }, []);
 
-  // ─── MONTAGEM DOS DADOS (NÓ CENTRAL FIXO + CONEXÕES RADIAIS) ─────────────
-  const graphData = useMemo(() => {
-    // 1. Injeta Nó Central Fixo (Claude / Sistema)
-    const centerNode: CustomNode = {
-      id: 'center',
-      name: 'Claude Core',
-      role: 'Orquestrador Central Neural',
-      department: 'sistema',
-      status: 'working',
-      category: 'core',
-      isCenter: true,
-      val: 36,
-      color: '#c084fc',
-      fx: 0,
-      fy: 0
-    };
-
-    const nodes: CustomNode[] = [centerNode];
-    const links: CustomLink[] = [];
-
-    // Paleta de tons roxo, magenta e violeta
-    const nodeColors = [
-      '#a855f7', // violeta vibrante
-      '#c084fc', // púrpura claro
-      '#d946ef', // fuchsia
-      '#ec4899', // rosa magenta
-      '#8b5cf6', // violeta escuro
-      '#a21caf'  // magenta profundo
-    ];
-
-    // 2. Conecta Agentes diretamente ao Nó Central
-    if (agents && agents.length > 0) {
-      agents.forEach((ag: any, index: number) => {
-        const status = ag.status || 'idle';
-        const node: CustomNode = {
-          id: ag.id,
-          name: ag.name,
-          role: ag.role,
-          department: ag.department,
-          status: status,
-          category: 'agente',
-          val: 18,
-          color: nodeColors[index % nodeColors.length]
-        };
-        nodes.push(node);
-
-        // Conexão radial obrigatória: do centro para o nó
-        links.push({
-          source: 'center',
-          target: ag.id,
-          status: status,
-          speed: (status === 'working' || status === 'ativo' || status === 'executando') ? 0.016 : 0.003
-        });
-      });
-    }
-
-    // 3. Conecta Memórias diretamente ao Nó Central
-    if (memories && memories.length > 0) {
-      memories.forEach((mem: any, index: number) => {
-        const memId = mem.id || `mem-${index}`;
-        // Evita duplicar IDs
-        if (!nodes.some((n) => n.id === memId)) {
-          const node: CustomNode = {
-            id: memId,
-            name: mem.title || 'Memória',
-            content: mem.content,
-            category: mem.category || 'memoria',
-            tags: mem.tags || [],
-            status: 'idle',
-            val: 14,
-            color: '#9333ea'
-          };
-          nodes.push(node);
-
-          links.push({
-            source: 'center',
-            target: memId,
-            status: 'idle',
-            speed: 0.005
-          });
-        }
-      });
-    }
-
-    // Fallback inicial visual caso o banco esteja vazio
-    if (nodes.length === 1) {
-      const fallbackNodes = [
-        { id: 'beatriz', name: 'Beatriz', role: 'Diretora Geral', department: 'diretoria', status: 'working' },
-        { id: 'helena', name: 'Helena', role: 'Diretora de Tecnologia', department: 'tecnologia', status: 'working' },
-        { id: 'rafael', name: 'Rafael', role: 'Arquiteto de Software', department: 'tecnologia', status: 'working' },
-        { id: 'camila', name: 'Camila', role: 'Desenvolvedora Front-end', department: 'tecnologia', status: 'working' },
-        { id: 'marcela', name: 'Marcela', role: 'Diretora de Marketing', department: 'marketing', status: 'idle' },
-        { id: 'felipe', name: 'Felipe', role: 'SDR e Prospecção', department: 'comercial', status: 'working' }
-      ];
-
-      fallbackNodes.forEach((fb, idx) => {
-        nodes.push({
-          id: fb.id,
-          name: fb.name,
-          role: fb.role,
-          department: fb.department,
-          status: fb.status,
-          category: 'agente',
-          val: 16,
-          color: nodeColors[idx % nodeColors.length]
-        });
-
-        links.push({
-          source: 'center',
-          target: fb.id,
-          status: fb.status,
-          speed: fb.status === 'working' ? 0.016 : 0.003
-        });
-      });
-    }
-
-    return { nodes, links };
-  }, [agents, memories]);
-
-  // ─── CONFIGURAÇÃO DA FÍSICA RADIAL D3 ─────────────────────────────────────
   useEffect(() => {
-    if (fgRef.current) {
-      // 1. Repulsão forte (charge negativo alto) para espalhar os nós uniformemente
-      const charge = fgRef.current.d3Force('charge');
-      if (charge && typeof charge.strength === 'function') {
-        charge.strength(-400);
-      }
+    const preference = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const update = () => setMotion(!preference.matches);
+    update();
+    preference.addEventListener('change', update);
+    return () => preference.removeEventListener('change', update);
+  }, []);
+  useEffect(() => { motionRef.current = motion; if (controlsRef.current) controlsRef.current.autoRotate = motion; }, [motion]);
 
-      // 2. Distância fixa para os links radiais
-      const linkForce = fgRef.current.d3Force('link');
-      if (linkForce && typeof linkForce.distance === 'function') {
-        linkForce.distance(150);
-      }
+  useEffect(() => {
+    if (!demo || document.hidden || !motion) return;
+    const id = window.setInterval(() => setDemoStep(step => step + 1), 9000);
+    return () => window.clearInterval(id);
+  }, [demo, motion]);
 
-      // 3. Força central
-      const centerForce = fgRef.current.d3Force('center');
-      if (centerForce) {
-        centerForce.strength?.(0.8);
-      }
-
-      // Reaquece a simulação para aplicar os parâmetros físicos
-      fgRef.current.d3ReheatSimulation();
-
-      // Ajusta zoom inicial suave
-      setTimeout(() => {
-        if (fgRef.current) {
-          fgRef.current.zoomToFit(600, 60);
-        }
-      }, 350);
+  const detachControls = useCallback(() => {
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    const controls = controlsRef.current;
+    const handlers = controlsHandlers.current;
+    if (controls && handlers) {
+      controls.removeEventListener('start', handlers.start);
+      controls.removeEventListener('end', handlers.end);
     }
-  }, [graphData]);
+    controlsHandlers.current = null;
+    controlsRef.current = null;
+  }, []);
+  const pauseForExplore = useCallback(() => {
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    if (controlsRef.current) controlsRef.current.autoRotate = false;
+  }, []);
+  const resetCamera = useCallback(() => {
+    pauseForExplore();
+    fgRef.current?.cameraPosition({ x: 0, y: 15, z: 355 }, { x: 0, y: 0, z: 0 }, 700);
+    timeoutRef.current = setTimeout(() => {
+      if (motionRef.current && controlsRef.current && !document.hidden) controlsRef.current.autoRotate = true;
+    }, 4500);
+  }, [pauseForExplore]);
+  const initializeGraph = useCallback(() => {
+    if (initialized.current || !fgRef.current) return;
+    initialized.current = true;
+    fgRef.current.cameraPosition({ x: 0, y: 15, z: 355 }, { x: 0, y: 0, z: 0 }, 0);
+    const controls: any = fgRef.current.controls();
+    controlsRef.current = controls;
+    const start = () => pauseForExplore();
+    const end = () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      timeoutRef.current = setTimeout(() => {
+        if (motionRef.current && controlsRef.current === controls && !document.hidden) controls.autoRotate = true;
+      }, 4500);
+    };
+    controlsHandlers.current = { start, end };
+    controls.addEventListener('start', start);
+    controls.addEventListener('end', end);
+    controls.autoRotate = motionRef.current && !document.hidden;
+    controls.autoRotateSpeed = 0.18;
+  }, [pauseForExplore]);
+  useEffect(() => () => detachControls(), [detachControls]);
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.hidden) {
+        pauseForExplore();
+        fgRef.current?.pauseAnimation();
+      } else {
+        fgRef.current?.resumeAnimation();
+        if (motionRef.current && controlsRef.current) controlsRef.current.autoRotate = true;
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, [pauseForExplore]);
 
-  // ─── INTERAÇÃO ON-NODE-CLICK COM ZOOM E CENTRALIZAÇÃO ─────────────────────
-  const handleNodeClick = useCallback((node: any) => {
-    setSelectedNode(node);
-    if (onSelectNode) {
-      onSelectNode(node);
-    }
-
-    // Transição de câmera suave (zoom e centralização) para o nó clicado
-    if (fgRef.current && node.x !== undefined && node.y !== undefined) {
-      fgRef.current.centerAt(node.x, node.y, 1000);
-      fgRef.current.zoom(2.6, 1000);
-    }
+  const close = useCallback(() => {
+    setSelectedId(null);
+    selectionTrigger.current?.focus();
+  }, []);
+  useEffect(() => {
+    if (!selectedId) return;
+    pauseForExplore();
+    closeRef.current?.focus();
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') close(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedId, close, pauseForExplore]);
+  const select = useCallback((node: BrainNode) => {
+    if (node.kind === 'structure' || node.kind === 'cluster') return;
+    selectionTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setSelectedId(node.id);
+    onSelectNode?.(node);
   }, [onSelectNode]);
 
-  // Reset de Câmera (Centralizar Todo o Grafo)
-  const handleResetCamera = useCallback(() => {
-    if (fgRef.current) {
-      fgRef.current.centerAt(0, 0, 800);
-      fgRef.current.zoomToFit(800, 60);
+  // Project persistent HTML labels without rebuilding React state every frame.
+  useEffect(() => {
+    let frame = 0;
+    let last = 0;
+    const render = (now: number) => {
+      frame = requestAnimationFrame(render);
+      if (document.hidden || now - last < 70 || !fgRef.current) return;
+      last = now;
+      graph.nodes.forEach(node => {
+        const label = labelElements.current.get(node.id);
+        if (!label || ![node.x, node.y, node.z].every(Number.isFinite)) return;
+        const point = fgRef.current!.graph2ScreenCoords(node.x, node.y, node.z);
+        const visible = Number.isFinite(point.x) && Number.isFinite(point.y)
+          && point.x > 10 && point.x < dimensions.width - 10 && point.y > 25 && point.y < dimensions.height - 20;
+        label.style.display = visible ? 'block' : 'none';
+        label.style.transform = `translate(${point.x}px, ${point.y + (node.kind === 'cluster' ? -10 : 12)}px) translateX(-50%)`;
+      });
+    };
+    frame = requestAnimationFrame(render);
+    return () => cancelAnimationFrame(frame);
+  }, [graph, dimensions]);
+
+  const tickScene = useCallback(() => {
+    initializeGraph();
+    const t = performance.now() / 1000;
+    for (const node of graph.nodes) {
+      if (![node.baseX, node.baseY, node.baseZ, node.phase].every(Number.isFinite)) continue;
+      const amp = motionRef.current ? (node.kind === 'structure' || node.kind === 'cluster' ? 0.3 : 2) : 0;
+      node.fx = node.baseX + Math.sin(t * 0.5 + node.phase) * amp;
+      node.fy = node.baseY + Math.cos(t * 0.6 + node.phase) * amp;
+      node.fz = node.baseZ + Math.sin(t * 0.4 + node.phase) * amp;
     }
-  }, []);
+  }, [graph, initializeGraph]);
 
-  // ─── RENDERIZAÇÃO CUSTOMIZADA DOS NÓS VIA CANVAS ─────────────────────────
-  const paintNode = useCallback((node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
-    // A simulação pode pintar antes de atribuir coordenadas válidas ao nó.
-    if (!Number.isFinite(node?.x) || !Number.isFinite(node?.y) ||
-        !Number.isFinite(globalScale) || globalScale <= 0) return;
-
-    const isCenter = node.isCenter;
-    const isSelected = selectedNode && selectedNode.id === node.id;
-    const radius = isCenter ? 14 : (isSelected ? 9 : 6.5);
-
-    // 1. Glow Pulsante Externo
-    ctx.beginPath();
-    ctx.arc(node.x, node.y, radius * 2.2, 0, 2 * Math.PI, false);
-    const glowGrad = ctx.createRadialGradient(node.x, node.y, radius * 0.5, node.x, node.y, radius * 2.2);
-    glowGrad.addColorStop(0, isCenter ? 'rgba(192, 132, 252, 0.5)' : (isSelected ? 'rgba(236, 72, 153, 0.6)' : 'rgba(168, 85, 247, 0.25)'));
-    glowGrad.addColorStop(1, 'rgba(5, 4, 10, 0)');
-    ctx.fillStyle = glowGrad;
-    ctx.fill();
-
-    // 2. Anel de Destaque
-    if (isCenter || isSelected) {
-      ctx.beginPath();
-      ctx.arc(node.x, node.y, radius + 3, 0, 2 * Math.PI, false);
-      ctx.strokeStyle = isCenter ? '#e879f9' : '#38bdf8';
-      ctx.lineWidth = 1.8 / globalScale;
-      ctx.setLineDash(isCenter ? [3, 3] : []);
-      ctx.stroke();
-      ctx.setLineDash([]);
-    }
-
-    // 3. Núcleo Sólido do Nó
-    ctx.beginPath();
-    ctx.arc(node.x, node.y, radius, 0, 2 * Math.PI, false);
-    ctx.fillStyle = isCenter ? '#c084fc' : (node.color || '#a855f7');
-    ctx.fill();
-
-    // 4. Dot de Status Operacional para Agentes
-    if (!isCenter && node.status) {
-      const isWorking = node.status === 'working' || node.status === 'ativo' || node.status === 'executando';
-      const isWaiting = node.status === 'waiting' || node.status === 'aguardando';
-      ctx.beginPath();
-      ctx.arc(node.x + radius * 0.7, node.y - radius * 0.7, 2.5, 0, 2 * Math.PI, false);
-      ctx.fillStyle = isWorking ? '#10b981' : (isWaiting ? '#f59e0b' : '#a855f7');
-      ctx.fill();
-    }
-
-    // 5. Rótulo de Texto Alinhado e Legível
-    const fontSize = Math.max(9 / globalScale, isCenter ? 4 : 3.2);
-    ctx.font = `${isCenter ? 'bold' : 'normal'} ${fontSize}px -apple-system, system-ui, sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
-    ctx.fillStyle = isCenter ? '#ffffff' : (isSelected ? '#f3e8ff' : '#cbd5e1');
-    ctx.fillText(node.name || node.id, node.x, node.y + radius + 3.5);
-
-    if (isCenter) {
-      ctx.font = `600 ${fontSize * 0.75}px monospace`;
-      ctx.fillStyle = '#c084fc';
-      ctx.fillText('NÚCLEO RADIAL', node.x, node.y + radius + 3.5 + fontSize);
-    }
-  }, [selectedNode]);
+  const renderableCount = graph.nodes.filter(n => n.kind !== 'structure' && n.kind !== 'cluster').length;
+  const dataMode = demo ? 'Demonstração · dados simulados' : 'Dados reais · Supabase';
 
   return (
-    <div className="relative rounded-xl bg-[#05040a] border border-purple-950/60 overflow-hidden text-left select-none">
-      {/* Header de Controle do Grafo */}
-      <div className="flex flex-wrap items-center justify-between px-3 sm:px-4 py-2.5 sm:py-3 border-b border-purple-950/40 bg-[#07060d] gap-2 z-10 relative">
-        <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
-          <div className="p-1 sm:p-1.5 rounded-lg bg-purple-950/50 border border-purple-900/40 text-purple-300 shrink-0">
-            <Brain className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-          </div>
-          <div className="min-w-0">
-            <div className="flex items-center gap-1.5">
-              <h3 className="text-xs font-semibold text-white tracking-wide truncate">
-                Rede Neural Radial (Grafo de Conhecimento)
-              </h3>
-              <span className="text-[8px] sm:text-[9px] px-1.5 py-0.2 rounded bg-purple-950 border border-purple-800/40 text-purple-300 font-mono shrink-0">
-                RADIAL • {graphData.nodes.length - 1} NÓS
-              </span>
-            </div>
-            <p className="text-[10px] text-zinc-500 hidden sm:block truncate">
-              Conexões sinápticas ativas centradas no Claude Core com física de repulsão e partículas em tempo real
-            </p>
+    <section aria-label="Constelação operacional de agentes" className="relative rounded-xl border border-[#32323a] overflow-hidden bg-[#15161a] text-left">
+      <header className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b border-[#33343b] bg-[#191a1f]">
+        <div className="flex items-center gap-2.5">
+          <span className={`w-2 h-2 rounded-full ${demo ? 'bg-amber-300 animate-pulse' : 'bg-emerald-400'}`} aria-hidden="true" />
+          <div>
+            <h3 className="text-sm font-semibold tracking-wide text-[#e7e5eb]">Constelação operacional</h3>
+            <p className={`text-[11px] ${demo ? 'text-amber-200' : 'text-zinc-400'}`} aria-live="polite">{dataMode} · {renderableCount} registros na rede</p>
           </div>
         </div>
-
-        {/* Ações da Barra Superior */}
-        <div className="flex items-center gap-1.5 shrink-0">
-          <button
-            onClick={handleResetCamera}
-            className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#0e0c18] hover:bg-[#151224] border border-purple-950/70 text-purple-300 text-[10px] sm:text-[11px] font-medium transition-all cursor-pointer"
-            title="Recentralizar câmera e ajustar zoom"
-          >
-            <Maximize2 className="w-3 h-3 text-purple-400" />
-            <span>Centralizar</span>
+        <div className="flex flex-wrap items-center gap-2">
+          <div aria-label="Fonte dos dados" className="flex rounded-lg border border-[#414149] p-0.5 bg-[#131418]">
+            <button type="button" aria-pressed={!demo} onClick={() => onDemoChange?.(false)} className={`px-2 py-1 rounded-md text-[11px] ${!demo ? 'bg-[#30313a] text-white' : 'text-zinc-400 hover:text-zinc-200'}`}>Reais</button>
+            <button type="button" aria-pressed={demo} onClick={() => onDemoChange?.(true)} className={`px-2 py-1 rounded-md text-[11px] ${demo ? 'bg-amber-950/70 text-amber-100' : 'text-zinc-400 hover:text-zinc-200'}`}>Demonstração</button>
+          </div>
+          <button type="button" onClick={() => setMotion(value => !value)} aria-pressed={motion}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-[#414149] text-xs text-zinc-300 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-300">
+            {motion ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}{motion ? 'Pausar movimento' : 'Retomar movimento'}
           </button>
+          <button type="button" onClick={resetCamera} aria-label="Restaurar visão da constelação" className="p-2 rounded-lg border border-[#414149] text-zinc-300 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-300"><Maximize2 className="w-4 h-4" /></button>
         </div>
+      </header>
+
+      <div ref={containerRef} className="relative bg-[#15161a]" style={{ height: dimensions.height }}>
+        <GraphBoundary>
+          <Suspense fallback={<div role="status" className="h-full flex items-center justify-center text-sm text-zinc-400">Carregando atlas neural 3D…</div>}>
+            <ForceGraph3D
+              ref={fgRef} width={dimensions.width} height={dimensions.height} graphData={graph}
+              backgroundColor="#15161a" controlType="orbit" showNavInfo={false}
+              nodeLabel={node => node.kind === 'cluster' ? node.name : ''}
+              nodeColor={node => node.id === selectedId ? '#ffffff' : node.color}
+              nodeVal={node => node.size} nodeRelSize={1.6} nodeOpacity={0.93} nodeResolution={6}
+              nodeVisibility={node => [node.x, node.y, node.z, node.baseX, node.baseY, node.baseZ].every(Number.isFinite)}
+              
+              linkColor={link => link.structural ? '#797185' : link.relation === 'message' ? '#fff2c5' : link.relation === 'task' ? '#70d5ee' : link.relation === 'service' ? '#ff9fca' : '#cab7ec'}
+              linkOpacity={0.65} linkWidth={link => link.structural ? 0.25 : link.relation === 'message' ? 0.65 : 0.4}
+              linkDirectionalParticles={link => motion && !link.structural ? 2 : 0}
+              linkDirectionalParticleWidth={1.4} linkDirectionalParticleColor={() => '#f4f0ff'} linkDirectionalParticleSpeed={0.0018}
+              enableNodeDrag={false} onNodeHover={node => setHoveredId(node && !['structure', 'cluster'].includes(node.kind) && typeof node.id === 'string' ? node.id : null)}
+              onNodeClick={node => { const entity = graph.nodes.find(item => item.id === node.id); if (entity) select(entity); }}
+              onEngineTick={tickScene} cooldownTicks={Infinity} cooldownTime={Infinity} d3AlphaMin={0}
+              d3VelocityDecay={0.4} d3AlphaDecay={0}
+            />
+
+          </Suspense>
+        </GraphBoundary>
+        <div className="absolute inset-0 pointer-events-none overflow-hidden" aria-hidden="true">
+          {graph.nodes.filter(n => n.kind === 'cluster' || n.kind === 'agent' || n.kind === 'service' || n.id === selectedId || n.id === hoveredId).map(node => (
+            <span key={node.id} ref={element => { if (element) labelElements.current.set(node.id, element); else labelElements.current.delete(node.id); }}
+              className={`absolute top-0 left-0 max-w-[170px] truncate px-1.5 py-0.5 rounded ${node.kind === 'cluster' ? 'text-[11px] font-semibold tracking-wide text-zinc-200 bg-[#16151d]/90 border border-[#565260]' : 'text-[11px] text-zinc-100 bg-[#15131a]/75'}`}>
+              {node.kind === 'cluster' ? node.name : node.kind === 'service' ? node.client || node.name : node.name}
+            </span>
+          ))}
+        </div>
+        <div className="absolute top-3 left-4 right-4 flex justify-between gap-3 pointer-events-none text-[10px] text-zinc-400 font-mono">
+          <span>{demo ? `SIMULAÇÃO LOCAL · ciclo ${demoStep + 1}` : 'ATLAS OPERACIONAL'}</span>
+          <span>{motion ? 'ÓRBITA SUAVE · clique ou arraste para explorar' : 'MOVIMENTO PAUSADO'}</span>
+        </div>
+        {hovered && <div className="absolute bottom-3 left-3 px-2 py-1 rounded bg-[#1c1d22]/90 border border-[#55545c] text-xs text-zinc-100 pointer-events-none">{KIND[hovered.kind] || 'Registro'} · {hovered.name}</div>}
       </div>
 
-      {/* Área do ForceGraph2D */}
-      <div ref={containerRef} className="relative w-full h-[320px] sm:h-[440px] bg-[#05040a] cursor-grab active:cursor-grabbing">
-        <ForceGraph2D
-          ref={fgRef as any}
-          width={dimensions.width}
-          height={dimensions.height}
-          graphData={graphData as any}
-          backgroundColor="#05040a"
-          
-          // Estilo dos Links e Conexões Radiais
-          linkColor={() => "rgba(168, 85, 247, 0.35)"}
-          linkWidth={1.4}
-          
-          // Partículas Sinápticas (Brancas, Correndo do Centro para os Nós)
-          linkDirectionalParticles={3}
-          linkDirectionalParticleWidth={2.4}
-          linkDirectionalParticleColor={() => "#ffffff"}
-          linkDirectionalParticleSpeed={(link: any) => {
-            // Velocidade dinâmica: rápida se ativo/executando, lenta se ocioso
-            const status = link.status || link.target?.status;
-            if (status === 'working' || status === 'ativo' || status === 'executando') {
-              return 0.016; // Sinapse rápida
-            }
-            return 0.0035; // Sinapse lenta / repouso
-          }}
-
-          // Renderizador Customizado dos Nós em Canvas
-          nodeCanvasObject={paintNode}
-          nodePointerAreaPaint={(node: any, color, ctx) => {
-            if (!Number.isFinite(node?.x) || !Number.isFinite(node?.y)) return;
-            const r = node.isCenter ? 16 : 10;
-            ctx.fillStyle = color;
-            ctx.beginPath();
-            ctx.arc(node.x, node.y, r, 0, 2 * Math.PI, false);
-            ctx.fill();
-          }}
-
-          // Clique no Nó
-          onNodeClick={handleNodeClick}
-
-          // Controle de física e amortecimento
-          d3AlphaDecay={0.02}
-          d3VelocityDecay={0.3}
-          warmupTicks={50}
-          cooldownTicks={150}
-          enableNodeDrag={true}
-          enableZoomInteraction={true}
-          enablePanInteraction={true}
-        />
-
-        {/* Legenda Discreta */}
-        <div className="absolute bottom-2.5 left-3 flex flex-wrap items-center gap-3 px-3 py-1.5 rounded-lg bg-[#080710]/90 border border-purple-950/60 text-[9px] text-zinc-400 backdrop-blur-md pointer-events-none">
-          <div className="flex items-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-full bg-purple-400 shadow-[0_0_8px_#c084fc]" />
-            <span className="text-zinc-200 font-medium">Núcleo Claude</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-emerald-400" />
-            <span>Executando (Sinapse Rápida)</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-purple-600" />
-            <span>Ocioso (Sinapse Lenta)</span>
-          </div>
+      <footer className="border-t border-[#33343b] px-4 py-3 bg-[#191a1f]">
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-x-3 gap-y-2 text-[11px] text-zinc-300">
+          <span><i className="inline-block w-2 h-2 rounded-full bg-[#aaa0ff] mr-1.5" />Agentes</span>
+          <span><i className="inline-block w-2 h-2 rounded-full bg-[#64c6df] mr-1.5" />Tarefas</span>
+          <span><i className="inline-block w-2 h-2 rounded-full bg-[#f1b765] mr-1.5" />Pendências</span>
+          <span><i className="inline-block w-2 h-2 rounded-full bg-[#ed91bd] mr-1.5" />Atendimento</span>
+          <span><i className="inline-block w-2 h-2 rounded-full bg-[#83d1a9] mr-1.5" />Memórias</span>
         </div>
+        <p className="mt-2 text-[10px] leading-relaxed text-zinc-500">Linhas claras representam responsáveis ou registros relacionados. Pontos pequenos ao fundo são ambientação visual, não entidades. {demo ? 'Todos os dados e atualizações desta visualização são fictícios.' : 'O painel reflete somente os registros carregados; não representa uma conexão direta ao processo dos agentes.'}</p>
+        {!demo && dataWarning && <p role="status" className="mt-2 text-xs text-amber-200 flex gap-2"><AlertCircle className="w-4 h-4 shrink-0" />Algumas fontes não carregaram: {dataWarning}</p>}
+        <div className="mt-3 flex flex-wrap gap-1.5" aria-label="Selecionar agente">
+          {live.agents.map((item: any) => <button key={item.id} type="button" onClick={() => {
+            const node = graph.nodes.find(candidate => candidate.kind === 'agent' && candidate.entityId === String(item.id));
+            if (node) select(node);
+          }} aria-pressed={selectedAgent?.id === item.id} className={`px-2 py-1 rounded-md border text-[11px] focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-300 ${selectedAgent?.id === item.id ? 'border-violet-300 bg-violet-950/50 text-white' : 'border-[#383940] text-zinc-300 hover:border-[#777580]'}`}>{item.name}</button>)}
+        </div>
+      </footer>
 
-        {/* Card Flutuante / Popup Lateral ao Clicar no Nó */}
-        {selectedNode && (
-          <div className="absolute top-2.5 right-2.5 sm:right-3 w-[calc(100%-1.25rem)] sm:w-80 max-w-sm p-4 rounded-xl bg-[#080710]/95 border border-purple-900/50 text-left backdrop-blur-xl shadow-2xl z-20 animate-in fade-in zoom-in-95 duration-200">
-            {/* Header do Card */}
-            <div className="flex items-start justify-between gap-2 mb-2 pb-2 border-b border-purple-950/40">
-              <div className="flex items-center gap-2">
-                <div className={`p-1.5 rounded-lg ${selectedNode.isCenter ? 'bg-purple-950/60 border border-purple-700/50 text-purple-300' : 'bg-[#0f0d1a] border border-purple-900/40 text-purple-400'}`}>
-                  {selectedNode.isCenter ? <Sparkles className="w-4 h-4 text-cyan-300" /> : <Bot className="w-4 h-4" />}
-                </div>
-                <div>
-                  <h4 className="text-xs font-bold text-white">
-                    {selectedNode.name}
-                  </h4>
-                  <span className="text-[10px] text-purple-400 font-mono block">
-                    {selectedNode.isCenter ? 'Núcleo Central' : (selectedNode.role || 'Módulo Sináptico')}
-                  </span>
-                </div>
-              </div>
-
-              <button
-                onClick={() => setSelectedNode(null)}
-                className="text-zinc-500 hover:text-white p-1 rounded-lg hover:bg-[#120f20] transition-colors cursor-pointer"
-                title="Fechar detalhes"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-
-            {/* Corpo com Informações do Nó */}
-            <div className="space-y-2 text-xs">
-              <div className="flex items-center justify-between text-[11px] font-mono">
-                <span className="text-zinc-500">Status Operacional:</span>
-                <span className={`px-2 py-0.5 rounded-full flex items-center gap-1 text-[10px] ${
-                  (selectedNode.status === 'working' || selectedNode.status === 'ativo' || selectedNode.status === 'executando')
-                    ? 'bg-emerald-950/40 text-emerald-400 border border-emerald-800/40'
-                    : 'bg-purple-950/40 text-purple-300 border border-purple-800/40'
-                }`}>
-                  <span className="w-1.5 h-1.5 rounded-full bg-current" />
-                  {selectedNode.status === 'working' ? 'Executando' : (selectedNode.status || 'Ocioso')}
-                </span>
-              </div>
-
-              {selectedNode.department && (
-                <div className="flex items-center justify-between text-[11px] font-mono">
-                  <span className="text-zinc-500">Departamento / Squad:</span>
-                  <span className="text-zinc-300 capitalize">{selectedNode.department}</span>
-                </div>
-              )}
-
-              {selectedNode.content && (
-                <div className="p-2.5 rounded-lg bg-[#0c0a15] border border-purple-950/60 mt-1">
-                  <span className="text-[10px] text-zinc-500 font-mono block mb-1">CONTEÚDO DA MEMÓRIA</span>
-                  <p className="text-[11px] text-zinc-300 leading-relaxed">
-                    {selectedNode.content}
-                  </p>
-                </div>
-              )}
-
-              {selectedNode.tags && selectedNode.tags.length > 0 && (
-                <div className="flex flex-wrap gap-1 pt-1">
-                  {selectedNode.tags.map((t: string) => (
-                    <span key={t} className="text-[9px] px-1.5 py-0.2 rounded bg-[#100d1c] border border-purple-950 text-purple-300 font-mono">
-                      #{t}
-                    </span>
-                  ))}
-                </div>
-              )}
-
-              {/* Botão de Ação Rápida */}
-              <div className="pt-2 flex items-center justify-between">
-                <button
-                  onClick={handleResetCamera}
-                  className="text-[10px] text-zinc-400 hover:text-white flex items-center gap-1 cursor-pointer font-mono"
-                >
-                  <RefreshCw className="w-3 h-3" />
-                  <span>Visão Global</span>
-                </button>
-                <span className="text-[9px] text-zinc-600 font-mono">
-                  ID: {selectedNode.id}
-                </span>
-              </div>
-            </div>
+      {selected && !['structure', 'cluster'].includes(selected.kind) && (
+        <aside role="dialog" aria-modal="false" aria-label={`Detalhes de ${selected.name}`} className="absolute z-20 top-16 right-2 left-2 sm:left-auto sm:right-3 sm:w-[370px] max-h-[calc(100%-5rem)] overflow-y-auto p-4 rounded-xl bg-[#191a20]/95 border border-[#5b5864] backdrop-blur-xl shadow-2xl">
+          <div className="flex items-start justify-between gap-3 border-b border-[#393940] pb-3 mb-3">
+            <div className="flex items-start gap-2"><Sparkles className="w-5 h-5 text-violet-300 mt-0.5 shrink-0" /><div><h4 className="text-sm font-semibold text-white">{selected.name}</h4><p className="text-[11px] text-zinc-400">{KIND[selected.kind] || 'Registro'}{demo ? ' · SIMULAÇÃO' : ''}</p></div></div>
+            <button ref={closeRef} type="button" onClick={close} aria-label="Fechar detalhes" className="p-1 text-zinc-400 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-300"><X className="w-4 h-4" /></button>
           </div>
-        )}
-      </div>
-    </div>
+          {selectedAgent && activity ? <div className="space-y-3 text-xs text-zinc-300">
+            <div className="flex justify-between gap-3"><span className="text-zinc-500">Função</span><span>{selectedAgent.role || 'Não informada'}</span></div>
+            <div className="flex justify-between gap-3"><span className="text-zinc-500">Status registrado</span><span>{STATUS[selectedAgent.status] || selectedAgent.status || 'Não informado'}</span></div>
+            <div className="border-l-2 border-violet-300 pl-3 py-1"><p className="text-[10px] text-zinc-500 mb-1">Atividade {demo ? 'simulada' : 'registrada'}</p><p aria-live="polite" className="leading-relaxed">{activity.summary}</p></div>
+            {activity.currentTask && <div><h5 className="font-medium text-white mb-1">Tarefa atual</h5><p>{activity.currentTask.title}</p><p className="text-[10px] text-zinc-500 mt-1">{STATUS[activity.currentTask.status] || activity.currentTask.status} · {dateLabel(activity.currentTask.updated_at)}</p></div>}
+            {activity.latestEvent && <div><h5 className="font-medium text-white mb-1">Atividade recente</h5><p>{activity.latestEvent.summary}</p></div>}
+            {relatedServices.length > 0 && <div className="rounded-lg border border-[#49434c] bg-[#202027] p-3"><h5 className="font-medium text-white flex items-center gap-1.5 mb-1"><BriefcaseBusiness className="w-3.5 h-3.5 text-pink-200" />Atendimento</h5>{relatedServices.slice(0, 2).map((service: any) => <div key={service.id} className="mt-2"><p className="text-zinc-100">{service.client} · {service.title}</p><p className="text-zinc-400 mt-0.5">{service.summary}</p></div>)}</div>}
+            {activity.recentMessages.length > 0 && <div><h5 className="font-medium text-white mb-1">Mensagens recentes</h5>{activity.recentMessages.slice(0, 3).map((message: any) => <p key={message.id} className="border-t border-[#383940] py-1.5 break-words">{message.content}</p>)}</div>}
+            {activity.pendingApprovals.length > 0 && <div><h5 className="font-medium text-white mb-1">Pendências ({activity.pendingApprovals.length})</h5>{activity.pendingApprovals.slice(0, 3).map((approval: any) => <p key={approval.id} className="flex gap-1.5 py-1"><Clock3 className="w-3 h-3 mt-0.5 text-amber-200" />{approval.action}</p>)}</div>}
+            {demo && <p className="rounded-md bg-amber-950/35 border border-amber-700/40 p-2 text-amber-100 flex gap-1.5"><Radio className="w-3 h-3 mt-0.5" />Exemplo fictício; nenhuma atividade está sendo enviada ao Supabase.</p>}
+            {!demo && dataWarning && <p role="status" className="text-amber-200">Alguns dados podem estar indisponíveis: {dataWarning}</p>}
+            {!demo && <p className="text-[10px] text-zinc-500 border-t border-[#393940] pt-2">Resumo dos registros carregados, não monitoramento direto do processo.</p>}
+          </div> : selected.kind === 'task' ? <div className="space-y-2 text-xs text-zinc-300"><p>Status · {STATUS[selected.status] || selected.status}</p><p>Responsável · {assignedAgent(selected.assigned_agent)?.name || 'Não atribuída'}</p></div>
+            : selected.kind === 'approval' ? <div className="space-y-2 text-xs text-zinc-300"><p>{selected.action}</p><p>Status · {STATUS[selected.status] || selected.status}</p><p>Solicitante · {assignedAgent(selected.agent_id)?.name || 'Não informado'}</p></div>
+            : selected.kind === 'service' ? <div className="space-y-2 text-xs text-zinc-300"><p className="font-medium text-white">{selected.client}</p><p>{selected.summary}</p><p>Responsável · {assignedAgent(selected.agent_id)?.name || 'Não informado'}</p><p>Status · {STATUS[selected.status] || selected.status}</p>{demo && <p className="text-amber-200">Atendimento fictício para demonstração.</p>}</div>
+            : selectedMemory ? <p className="text-xs text-zinc-300 leading-relaxed whitespace-pre-wrap break-words">{selectedMemory.content || 'Memória sem conteúdo disponível.'}</p>
+            : <p className="text-xs text-zinc-400">Registro não disponível.</p>}
+        </aside>
+      )}
+    </section>
   );
 };

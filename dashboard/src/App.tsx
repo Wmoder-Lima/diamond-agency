@@ -58,6 +58,7 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedDeptFilter, setSelectedDeptFilter] = useState<string>('todos');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [graphDemo, setGraphDemo] = useState(false);
 
   // Escuta autenticação do Supabase
   useEffect(() => {
@@ -391,9 +392,14 @@ export default function App() {
                 </div>
               </div>
 
-              {/* CÉREBRO VIRTUAL INTERATIVO (REDE NEURAL RADIAL FORCE-GRAPH) */}
+              {/* CÉREBRO VIRTUAL INTERATIVO (REDE NEURAL 3D) */}
               <div className="space-y-2">
-                <KnowledgeGraph memories={memories} agents={agents} />
+                <KnowledgeGraph
+                  memories={memories} agents={agents}
+                  demo={graphDemo} onDemoChange={setGraphDemo}
+                  tasks={tasks} events={events} messages={messages} approvals={approvals}
+                  dataWarning={agentsTable.error || tasksTable.error || eventsTable.error || messagesTable.error || approvalsTable.error}
+                />
               </div>
 
               {/* Gráficos Reais Injetados com Tarefas e Agentes */}
@@ -783,7 +789,12 @@ export default function App() {
                 </p>
               </div>
 
-              <KnowledgeGraph memories={memories} agents={agents} />
+              <KnowledgeGraph
+                  memories={memories} agents={agents}
+                  demo={graphDemo} onDemoChange={setGraphDemo}
+                  tasks={tasks} events={events} messages={messages} approvals={approvals}
+                  dataWarning={agentsTable.error || tasksTable.error || eventsTable.error || messagesTable.error || approvalsTable.error}
+                />
 
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 {memories.length === 0 ? (
