@@ -13,7 +13,6 @@ import {
   ShieldAlert,
   Bot
 } from 'lucide-react';
-import { useTable } from '../supabase';
 
 interface KnowledgeGraphProps {
   memories?: any[];
@@ -54,12 +53,9 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({
   const fgRef = useRef<ForceGraphMethods<CustomNode, CustomLink> | undefined>(undefined);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
-  // Fallback para hooks de useTable caso não sejam passados via props
-  const liveMemoriesTable = useTable<any>('memories', 'created_at', 150);
-  const liveAgentsTable = useTable<any>('agents', 'name', 100);
-
-  const memories = propMemories ?? liveMemoriesTable.rows;
-  const agents = propAgents ?? liveAgentsTable.rows;
+  // Dados são fornecidos pelo App; não abrir canais Realtime duplicados aqui.
+  const memories = propMemories ?? [];
+  const agents = propAgents ?? [];
 
   const [selectedNode, setSelectedNode] = useState<CustomNode | null>(null);
   const [dimensions, setDimensions] = useState({ width: 700, height: 440 });
@@ -255,6 +251,10 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({
 
   // ─── RENDERIZAÇÃO CUSTOMIZADA DOS NÓS VIA CANVAS ─────────────────────────
   const paintNode = useCallback((node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
+    // A simulação pode pintar antes de atribuir coordenadas válidas ao nó.
+    if (!Number.isFinite(node?.x) || !Number.isFinite(node?.y) ||
+        !Number.isFinite(globalScale) || globalScale <= 0) return;
+
     const isCenter = node.isCenter;
     const isSelected = selectedNode && selectedNode.id === node.id;
     const radius = isCenter ? 14 : (isSelected ? 9 : 6.5);
@@ -375,6 +375,7 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({
           // Renderizador Customizado dos Nós em Canvas
           nodeCanvasObject={paintNode}
           nodePointerAreaPaint={(node: any, color, ctx) => {
+            if (!Number.isFinite(node?.x) || !Number.isFinite(node?.y)) return;
             const r = node.isCenter ? 16 : 10;
             ctx.fillStyle = color;
             ctx.beginPath();
